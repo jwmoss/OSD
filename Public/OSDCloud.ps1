@@ -1,4 +1,4 @@
-﻿function Invoke-OSDCloud {
+function Invoke-OSDCloud {
     <#
     .SYNOPSIS
     This is the master OSDCloud Task Sequence
@@ -131,6 +131,8 @@
         ImageFileDestinationSHA1 = $null
         ImageFileUrl = $null
         ImageFileSHA1 = $null
+        OSImagePath = $null
+        NoCloudOSDownload = [bool]$false
         IsOnBattery = $(Get-OSDGather -Property IsOnBattery)
         IsTest = ($env:SystemDrive -ne 'X:')
         IsVirtualMachine = $(Test-IsVM)
@@ -273,6 +275,39 @@
     }
     #endregion
 
+    #region Resolve OSImagePath Override
+    if ($Global:OSDCloud.OSImagePath) {
+        $AllowedExtensions = @('.wim','.esd','.iso','.swm')
+        $Extension = [System.IO.Path]::GetExtension($Global:OSDCloud.OSImagePath)
+
+        if (-not (Test-Path -Path $Global:OSDCloud.OSImagePath -PathType Leaf)) {
+            Write-Warning "OSImagePath does not exist or is not a file: $($Global:OSDCloud.OSImagePath)"
+            Write-Warning 'OSDCloud cannot continue'
+            Start-Sleep -Seconds 86400
+            Exit
+        }
+        if ($AllowedExtensions -notcontains $Extension) {
+            Write-Warning "OSImagePath extension '$Extension' is not supported. Supported: $($AllowedExtensions -join ', ')"
+            Write-Warning "OSImagePath: $($Global:OSDCloud.OSImagePath)"
+            Write-Warning 'OSDCloud cannot continue'
+            Start-Sleep -Seconds 86400
+            Exit
+        }
+
+        $Global:OSDCloud.ImageFileItem = Get-Item -Path $Global:OSDCloud.OSImagePath -ErrorAction Stop
+        $Global:OSDCloud.ImageFileFullName = $Global:OSDCloud.ImageFileItem.FullName
+        $Global:OSDCloud.ImageFileName = $Global:OSDCloud.ImageFileItem.Name
+        $Global:OSDCloud.ImageFileUrl = $null
+
+        if ($null -eq $Global:OSDCloud.NoCloudOSDownload) {
+            $Global:OSDCloud.NoCloudOSDownload = [bool]$false
+        }
+        $Global:OSDCloud.NoCloudOSDownload = [bool]$true
+
+        Write-DarkGrayHost "OSImagePath override: $($Global:OSDCloud.ImageFileItem.FullName)"
+    }
+    #endregion
+ 
     #region Set Post-Merge Defaults
     $Global:OSDCloud.Version = [Version](Get-Module -Name OSD -ListAvailable | Sort-Object Version -Descending | Select-Object -First 1).Version
 
@@ -970,6 +1005,30 @@
         }
         #endregion
 
+        #region NoCloudOSDownload Guard
+        if ($Global:OSDCloud.NoCloudOSDownload -eq $true) {
+            $HasLocalImage = $false
+            if ($Global:OSDCloud.ImageFileDestination -and $Global:OSDCloud.ImageFileDestination.FullName -and (Test-Path $Global:OSDCloud.ImageFileDestination.FullName)) {
+                $HasLocalImage = $true
+            }
+            elseif ($Global:OSDCloud.ImageFileItem -and $Global:OSDCloud.ImageFileItem.FullName -and (Test-Path $Global:OSDCloud.ImageFileItem.FullName)) {
+                $HasLocalImage = $true
+            }
+            elseif ($Global:OSDCloud.AzOSDCloudImage) {
+                $HasLocalImage = $true
+            }
+
+            if (-not $HasLocalImage) {
+                Write-Warning "[$(Get-Date -format G)] OSDCloud Failed"
+                Write-Warning "NoCloudOSDownload is enabled, but no local OS image is available"
+                Write-Warning "OSImagePath: $($Global:OSDCloud.OSImagePath)"
+                Write-Warning 'Press Ctrl+C to exit'
+                Start-Sleep -Seconds 86400
+                Exit
+            }
+        }
+        #endregion
+
         #region WindowsImage Download
         if (!($Global:OSDCloud.ImageFileDestination) -and ($Global:OSDCloud.ImageFileUrl)) {
             Write-SectionHeader "Download Operating System"
@@ -1024,18 +1083,32 @@
         if ($Global.OSDCloud.CheckSHA1 -eq $true){
             if (($Global:OSDCloud.ImageFileDestination) -and ($Global:OSDCloud.ImageFileDestination.FullName)){
                 $Global:OSDCloud.ImageFileDestinationSHA1 = (Get-FileHash -Path $Global:OSDCloud.ImageFileDestination.FullName -Algorithm SHA1).Hash
-                $Global:OSDCloud.ImageFileSHA1 = (Get-OSDCloudOperatingSystems | Where-Object {$_.FileName -eq $Global:OSDCloud.ImageFileName}).SHA1
-                if ($Global:OSDCloud.ImageFileDestinationSHA1 -ne $Global:OSDCloud.ImageFileSHA1){
-                    Write-Warning "SHA1 Mismatch"
-                    Write-Warning "Downloaded ESD SHA1: $($Global:OSDCloud.ImageFileDestinationSHA1)"
-                    Write-Warning "Catalog ESD SHA1: $($Global:OSDCloud.ImageFileSHA1)"
-                    Write-Warning "Press Ctrl+C to exit"
+
+                $ExpectedSHA1 = $null
+                if ($Global:OSDCloud.GetFeatureUpdate -and $Global:OSDCloud.GetFeatureUpdate.SHA1) {
+                    $ExpectedSHA1 = $Global:OSDCloud.GetFeatureUpdate.SHA1
+                }
+                elseif ($Global:OSDCloud.ImageFileName) {
+                    $ExpectedSHA1 = (Get-OSDCloudOperatingSystems | Where-Object { $_.FileName -eq $Global:OSDCloud.ImageFileName }).SHA1
+                }
+
+                $Global:OSDCloud.ImageFileSHA1 = $ExpectedSHA1
+
+                if (-not $ExpectedSHA1) {
+                    Write-Warning 'CheckSHA1 is enabled, but an expected SHA1 could not be determined'
+                    Write-Warning "Downloaded Image SHA1: $($Global:OSDCloud.ImageFileDestinationSHA1)"
+                }
+                elseif ($Global:OSDCloud.ImageFileDestinationSHA1 -ne $ExpectedSHA1){
+                    Write-Warning 'SHA1 Mismatch'
+                    Write-Warning "Downloaded Image SHA1: $($Global:OSDCloud.ImageFileDestinationSHA1)"
+                    Write-Warning "Expected Image SHA1:  $ExpectedSHA1"
+                    Write-Warning 'Press Ctrl+C to exit'
                     Start-Sleep -Seconds 86400
                 }
                 else {
-                    Write-Host -ForegroundColor Green "SHA1 Match"
-                    Write-Host -ForegroundColor DarkGray " Catalog ESD SHA1:    $(($Global:OSDCloud.ImageFileSHA1).ToUpper())"
-                    Write-Host -ForegroundColor DarkGray " Downloaded ESD SHA1: $($Global:OSDCloud.ImageFileDestinationSHA1)"
+                    Write-Host -ForegroundColor Green 'SHA1 Match'
+                    Write-Host -ForegroundColor DarkGray " Expected Image SHA1:  $($ExpectedSHA1.ToUpper())"
+                    Write-Host -ForegroundColor DarkGray " Downloaded Image SHA1: $($Global:OSDCloud.ImageFileDestinationSHA1)"
                 }
             }
         }

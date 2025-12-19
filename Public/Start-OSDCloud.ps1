@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Prepare and start an OSDCloud deployment session (selects image, language, edition and other options).
 
@@ -197,6 +197,11 @@ function Start-OSDCloud {
         [System.String]
         $OSActivation,
 
+        #Full path to a local Windows image (WIM/ESD/ISO/SWM).
+        #If provided, Start-OSDCloud will use this file and will not download an OS image from the cloud.
+        [System.String]
+        $OSImagePath,
+ 
         #Searches for the specified WIM file
         [Parameter(ParameterSetName = 'CustomImage')]
         [System.Management.Automation.SwitchParameter]
@@ -236,6 +241,8 @@ function Start-OSDCloud {
         ImageFileSource = $null
         ImageFileDestination = $null
         ImageFileUrl = $ImageFileUrl
+        OSImagePath = $OSImagePath
+        NoCloudOSDownload = $false
         IsOnBattery = Get-OSDGather -Property IsOnBattery
         Manufacturer = $Manufacturer
         MSCatalogFirmware = $false
@@ -352,7 +359,7 @@ function Start-OSDCloud {
     Write-Host -ForegroundColor DarkGray "========================================================================="
     Write-Host -ForegroundColor Cyan "[$(Get-Date -format G)] Test-WebConnection" -NoNewline
     #Write-Host -ForegroundColor DarkGray "google.com"
-
+ 
     if (Test-WebConnection -Uri "google.com") {
         Write-Host -ForegroundColor Green " OK"
     }
@@ -361,6 +368,41 @@ function Start-OSDCloud {
         Write-Warning "Could not validate an Internet connection"
         Write-Warning "OSDCloud will continue, but there may be issues if this can't be resolved"
     }
+
+    #=================================================
+    #	OSImagePath Override
+    #=================================================
+    if (-not $Global:StartOSDCloud.OSImagePath -and $Global:MyOSDCloud -and $Global:MyOSDCloud.OSImagePath) {
+        $Global:StartOSDCloud.OSImagePath = $Global:MyOSDCloud.OSImagePath
+    }
+
+    $UseOSImagePathOverride = $false
+    if ($Global:StartOSDCloud.OSImagePath) {
+        $AllowedExtensions = @('.wim','.esd','.iso','.swm')
+        $Extension = [System.IO.Path]::GetExtension($Global:StartOSDCloud.OSImagePath)
+
+        if (-not (Test-Path -Path $Global:StartOSDCloud.OSImagePath -PathType Leaf)) {
+            Write-Warning "OSImagePath does not exist or is not a file: $($Global:StartOSDCloud.OSImagePath)"
+            Write-Warning 'OSDCloud cannot continue'
+            Break
+        }
+        if ($AllowedExtensions -notcontains $Extension) {
+            Write-Warning "OSImagePath extension '$Extension' is not supported. Supported: $($AllowedExtensions -join ', ')"
+            Write-Warning "OSImagePath: $($Global:StartOSDCloud.OSImagePath)"
+            Write-Warning 'OSDCloud cannot continue'
+            Break
+        }
+
+        $Global:StartOSDCloud.ImageFileItem = Get-Item -Path $Global:StartOSDCloud.OSImagePath -ErrorAction Stop
+        $Global:StartOSDCloud.ImageFileFullName = $Global:StartOSDCloud.ImageFileItem.FullName
+        $Global:StartOSDCloud.ImageFileName = $Global:StartOSDCloud.ImageFileItem.Name
+        $Global:StartOSDCloud.ImageFileUrl = $null
+        $Global:StartOSDCloud.NoCloudOSDownload = $true
+        $UseOSImagePathOverride = $true
+
+        Write-Host -ForegroundColor DarkGray "OSImagePath override: $($Global:StartOSDCloud.ImageFileItem.FullName)"
+    }
+
     #=================================================
     #	Custom Image
     #=================================================
@@ -706,8 +748,11 @@ function Start-OSDCloud {
             #$Global:StartOSDCloud.ImageFileName = $Global:StartOSDCloud.GetFeatureUpdate.FileName
             #$Global:StartOSDCloud.ImageFileUrl = $Global:StartOSDCloud.GetFeatureUpdate.FileUri
             $Global:StartOSDCloud.GetFeatureUpdate = $Global:StartOSDCloud.GetFeatureUpdate | Select-Object -Property ReleaseDate,Name,Version,ReleaseID,Architecture,FileName,Url,SHA1,AdditionalHash
-            $Global:StartOSDCloud.ImageFileName = $Global:StartOSDCloud.GetFeatureUpdate.FileName
-            $Global:StartOSDCloud.ImageFileUrl = $Global:StartOSDCloud.GetFeatureUpdate.Url
+
+            if (-not $UseOSImagePathOverride) {
+                $Global:StartOSDCloud.ImageFileName = $Global:StartOSDCloud.GetFeatureUpdate.FileName
+                $Global:StartOSDCloud.ImageFileUrl = $Global:StartOSDCloud.GetFeatureUpdate.Url
+            }
         }
         else {
             Write-Warning "Unable to locate a Windows Feature Update"
@@ -715,31 +760,37 @@ function Start-OSDCloud {
             Break
         }
 
-        $Global:StartOSDCloud.ImageFileItem = Find-OSDCloudFile -Name $Global:StartOSDCloud.GetFeatureUpdate.FileName -Path '\OSDCloud\OS\' | Sort-Object FullName | Where-Object {$_.Length -gt 3GB}
-        $Global:StartOSDCloud.ImageFileItem = $Global:StartOSDCloud.ImageFileItem | Where-Object {$_.FullName -notlike "C*"} | Where-Object {$_.FullName -notlike "X*"} | Select-Object -First 1
-
-        if ($Global:StartOSDCloud.ImageFileItem) {
-            #Write-Host -ForegroundColor Green "OK"
-            #Write-Host -ForegroundColor DarkGray $Global:StartOSDCloud.GetFeatureUpdate.Title
+        if ($UseOSImagePathOverride) {
             Write-Host -ForegroundColor DarkGray $Global:StartOSDCloud.GetFeatureUpdate.Name
             Write-Host -ForegroundColor DarkGray $Global:StartOSDCloud.ImageFileItem.FullName
         }
-        #elseif (Test-WebConnection -Uri $Global:StartOSDCloud.GetFeatureUpdate.FileUri) {
-        elseif (Test-WebConnection -Uri $Global:StartOSDCloud.ImageFileUrl) {
-            #Write-Host -ForegroundColor Yellow "Download"
-            #Write-Host -ForegroundColor Yellow $Global:StartOSDCloud.GetFeatureUpdate.Title
-            Write-Host -ForegroundColor Yellow $Global:StartOSDCloud.GetFeatureUpdate.Name
-            #Write-Host -ForegroundColor Yellow $Global:StartOSDCloud.GetFeatureUpdate.FileUri
-            Write-Host -ForegroundColor Yellow $Global:StartOSDCloud.ImageFileUrl
-        }
         else {
-            #Write-Warning $Global:StartOSDCloud.GetFeatureUpdate.Title
-            #Write-Warning $Global:StartOSDCloud.GetFeatureUpdate.FileUri
-            Write-Warning $Global:StartOSDCloud.GetFeatureUpdate.Name
-            Write-Warning $Global:StartOSDCloud.ImageFileUrl
-            Write-Warning "Could not verify an Internet connection for Windows Feature Update"
-            Write-Warning "OSDCloud cannot continue"
-            Break
+            $Global:StartOSDCloud.ImageFileItem = Find-OSDCloudFile -Name $Global:StartOSDCloud.GetFeatureUpdate.FileName -Path '\OSDCloud\OS\' | Sort-Object FullName | Where-Object {$_.Length -gt 3GB}
+            $Global:StartOSDCloud.ImageFileItem = $Global:StartOSDCloud.ImageFileItem | Where-Object {$_.FullName -notlike "C*"} | Where-Object {$_.FullName -notlike "X*"} | Select-Object -First 1
+
+            if ($Global:StartOSDCloud.ImageFileItem) {
+                #Write-Host -ForegroundColor Green "OK"
+                #Write-Host -ForegroundColor DarkGray $Global:StartOSDCloud.GetFeatureUpdate.Title
+                Write-Host -ForegroundColor DarkGray $Global:StartOSDCloud.GetFeatureUpdate.Name
+                Write-Host -ForegroundColor DarkGray $Global:StartOSDCloud.ImageFileItem.FullName
+            }
+            #elseif (Test-WebConnection -Uri $Global:StartOSDCloud.GetFeatureUpdate.FileUri) {
+            elseif (Test-WebConnection -Uri $Global:StartOSDCloud.ImageFileUrl) {
+                #Write-Host -ForegroundColor Yellow "Download"
+                #Write-Host -ForegroundColor Yellow $Global:StartOSDCloud.GetFeatureUpdate.Title
+                Write-Host -ForegroundColor Yellow $Global:StartOSDCloud.GetFeatureUpdate.Name
+                #Write-Host -ForegroundColor Yellow $Global:StartOSDCloud.GetFeatureUpdate.FileUri
+                Write-Host -ForegroundColor Yellow $Global:StartOSDCloud.ImageFileUrl
+            }
+            else {
+                #Write-Warning $Global:StartOSDCloud.GetFeatureUpdate.Title
+                #Write-Warning $Global:StartOSDCloud.GetFeatureUpdate.FileUri
+                Write-Warning $Global:StartOSDCloud.GetFeatureUpdate.Name
+                Write-Warning $Global:StartOSDCloud.ImageFileUrl
+                Write-Warning "Could not verify an Internet connection for Windows Feature Update"
+                Write-Warning "OSDCloud cannot continue"
+                Break
+            }
         }
     }
     #=================================================

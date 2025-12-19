@@ -16,21 +16,21 @@ Starts the OSDCloud Windows 10 or 11 Build Process from the OSD Module or a GitH
 ```
 Start-OSDCloud [-Manufacturer <String>] [-Product <String>] [-Firmware] [-Restart] [-Shutdown] [-Screenshot]
  [-SkipAutopilot] [-SkipODT] [-ZTI] [-OSName <String>] [-OSEdition <String>] [-OSLanguage <String>]
- [-OSActivation <String>] [-Preview] [-ProgressAction <ActionPreference>] [<CommonParameters>]
+ [-OSActivation <String>] [-OSImagePath <String>] [-Preview] [-ProgressAction <ActionPreference>] [<CommonParameters>]
 ```
 
 ### Legacy
 ```
 Start-OSDCloud [-Manufacturer <String>] [-Product <String>] [-Firmware] [-Restart] [-Shutdown] [-Screenshot]
  [-SkipAutopilot] [-SkipODT] [-ZTI] [-OSVersion <String>] [-OSBuild <String>] [-OSEdition <String>]
- [-OSLanguage <String>] [-OSActivation <String>] [-Preview] [-ProgressAction <ActionPreference>]
+ [-OSLanguage <String>] [-OSActivation <String>] [-OSImagePath <String>] [-Preview] [-ProgressAction <ActionPreference>]
  [<CommonParameters>]
 ```
 
 ### CustomImage
 ```
 Start-OSDCloud [-Manufacturer <String>] [-Product <String>] [-Firmware] [-Restart] [-Shutdown] [-Screenshot]
- [-SkipAutopilot] [-SkipODT] [-ZTI] [-FindImageFile] [-ImageFileUrl <String>] [-OSImageIndex <String>]
+ [-SkipAutopilot] [-SkipODT] [-ZTI] [-OSImagePath <String>] [-FindImageFile] [-ImageFileUrl <String>] [-OSImageIndex <String>]
  [-Preview] [-ProgressAction <ActionPreference>] [<CommonParameters>]
 ```
 
@@ -268,6 +268,21 @@ License of the Windows Operating System
 Type: String
 Parameter Sets: Default, Legacy
 Aliases: License, OSLicense, Activation
+
+Required: False
+Position: Named
+Default value: None
+Accept pipeline input: False
+Accept wildcard characters: False
+```
+
+### -OSImagePath
+Full path to a local Windows image (WIM/ESD/ISO/SWM). When set, Start-OSDCloud will use this file and will not download an OS image from the cloud.
+
+```yaml
+Type: String
+Parameter Sets: (All)
+Aliases:
 
 Required: False
 Position: Named
